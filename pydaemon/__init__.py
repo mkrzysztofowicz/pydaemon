@@ -63,7 +63,7 @@ class Daemon(object):
         self.logger.addHandler(console_handler)
 
         if os.path.exists('/dev/log'):
-            syslog_handler = logging.handlers.SysLogHandler('/dev/log')
+            syslog_handler = logging.handlers.SysLogHandler('/dev/log', facility='daemon')
             syslog_handler.setFormatter(logformatter)
             self.logger.addHandler(syslog_handler)
 
