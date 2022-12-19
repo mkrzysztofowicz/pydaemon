@@ -96,6 +96,9 @@ class Daemon(object):
         # change to root directory
         os.chdir('/')
 
+        # Ensure complete control over the files the daemon creates
+        os.umask(0)
+
         self.fork()     # second fork, relinquish session leadership
 
     def fork(self):
@@ -112,11 +115,15 @@ class Daemon(object):
 
     def create_pidfile(self):
         """
-        Create a pid file and save the current pid.
+        Create a pid file and save the pid.
         """
         atexit.register(self.delete_pidfile)
         pid = str(os.getpid())
-        open(self.pidfile, 'w+').write("{}\n".format(pid))
+        try:
+            open(self.pidfile, 'w+').write("{}\n".format(pid))
+        except OSError as e:
+            self.logger.error("Error creating PID file {}: {} ({})".format(self.pidfile, e.errno, e.strerror))
+            raise SystemExit(1)
 
     def delete_pidfile(self):
         """
@@ -188,15 +195,23 @@ class Daemon(object):
 
         self.dettach_process()
 
+        self.create_pidfile()
+
         # Flush I/O buffers
         sys.stdout.flush()
         sys.stderr.flush()
 
-        self.attach_stream('stdin', mode='r')
-        self.attach_stream('stdout', mode='a+')
-        self.attach_stream('stderr', mode='a+')
+        # close all open file descriptors
+        os.closerange(0, sys.maxsize)
 
-        self.create_pidfile()
+        # ensure stdin, stdout, stderr are redirected to /dev/null
+        # so that the daemon does not output anything to the console
+        stdin = open(os.devnull, 'r')
+        stdout = open(os.devnull, 'w')
+        stderr = open(os.devnull, 'w')
+        os.dup2(stdin.fileno(), sys.stdin.fileno())
+        os.dup2(stdout.fileno(), sys.stdout.fileno())
+        os.dup2(stderr.fileno(), sys.stderr.fileno())
 
         # Setup signal handlers
         # signal.signal(signal.SIGHUP, self.sighup_handler)
@@ -314,7 +329,7 @@ class Daemon(object):
 
     def sigterm_handler(self, signo, frame):
         """
-        Sigterm handler method. By default this will simply log a message to say the daemon is terminating and
+        Sigterm handler method. By default, this will simply log a message to say the daemon is terminating and
         then exit.
 
         If any extra functionality needed, this method should be overridden in the child class.
@@ -325,7 +340,7 @@ class Daemon(object):
 
     def sigusr_handler(self, signo, frame):
         """
-        Siginfo handler method. By default his will simply display the status.
+        Siginfo handler method. By default, this will simply display the status.
         """
 
         self.logger.info("Received SIGUSR signal: {}".format(signo))
