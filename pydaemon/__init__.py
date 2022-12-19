@@ -6,6 +6,7 @@ This file implements the Daemon class, which can be subclassed by your daemon sc
 
 import atexit
 import configparser
+from ctypes import c_int16, sizeof
 import grp
 import logging
 import logging.handlers
@@ -49,7 +50,7 @@ class Daemon(object):
 
     def setup_logging(self):
         """
-        Set up the logging sytem.
+        Set up the logging system.
 
         This will set the format for all log messages, configure the logging system to send messages to syslog via
         a special file /dev/log. In addition, the logging system will be configured to log all uncaught exceptions
@@ -63,7 +64,8 @@ class Daemon(object):
         self.logger.addHandler(console_handler)
 
         if os.path.exists('/dev/log'):
-            syslog_handler = logging.handlers.SysLogHandler('/dev/log', facility='daemon')
+            syslog_handler = logging.handlers.SysLogHandler('/dev/log',
+                                                            facility=logging.handlers.SysLogHandler.LOG_DAEMON)
             syslog_handler.setFormatter(logformatter)
             self.logger.addHandler(syslog_handler)
 
@@ -79,11 +81,14 @@ class Daemon(object):
     def attach_stream(self, name, mode):
         """
         Replaces the stream with a new one
+        :param str name: name of the class property which stores the file name for the stream
+                         (e.g. for self.stdin this should be 'stdin')
+        :param str mode: file access mode ('r', 'w', 'a', etc, as per the open() call)
         """
         stream = open(getattr(self, name), mode)
         os.dup2(stream.fileno(), getattr(sys, name).fileno())
 
-    def dettach_process(self):
+    def detach_process(self):
         """
         Detach the process from the environment.
         """
@@ -186,14 +191,20 @@ class Daemon(object):
 
     def daemonize(self):
         """
-        Make a daemon out of the process by dettaching from the environment and forking. If username is specified,
+        Make a daemon out of the process by detaching from the environment and forking. If username is specified,
         this method will also cause the daemon to drop privileges to those of the specified user.
         Also register sigterm handler.
         """
+
+        def __fdmax():
+            bit_size = sizeof(c_int16) * 8
+            limit = 2 ** (bit_size - 1)
+            return 2 * limit - 1
+
         if self.dont_daemonize:
             return
 
-        self.dettach_process()
+        self.detach_process()
 
         self.create_pidfile()
 
@@ -202,16 +213,13 @@ class Daemon(object):
         sys.stderr.flush()
 
         # close all open file descriptors
-        os.closerange(0, sys.maxsize)
+        os.closerange(0, __fdmax())
 
         # ensure stdin, stdout, stderr are redirected to /dev/null
         # so that the daemon does not output anything to the console
-        stdin = open(os.devnull, 'r')
-        stdout = open(os.devnull, 'w')
-        stderr = open(os.devnull, 'w')
-        os.dup2(stdin.fileno(), sys.stdin.fileno())
-        os.dup2(stdout.fileno(), sys.stdout.fileno())
-        os.dup2(stderr.fileno(), sys.stderr.fileno())
+        self.attach_stream('stdin', mode='r')
+        self.attach_stream('stdout', mode='w')
+        self.attach_stream('stderr', mode='w')
 
         # Setup signal handlers
         # signal.signal(signal.SIGHUP, self.sighup_handler)
@@ -285,7 +293,7 @@ class Daemon(object):
 
         if self.config_file is not None:
             self.logger.info("Reloading configuration")
-            self.configuration = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation)
+            self.configuration = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
             self.configure()
 
         self.start()
